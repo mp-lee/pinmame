@@ -1,21 +1,27 @@
 /************************************************************************************************
   Nuova Bell Games
   ----------------
-  by Steve Ellenoff, with fixes / hacks by Gerrit Volkenborn
-
+  by Steve Ellenoff
+  
   Main CPU Board:
 
   CPU: Motorola M6802
   Clock: Unknown (1Mhz?)
-  Interrupt: IRQ - Via the 6821 chips, NMI - Push Button?
-  I/O: 2 X 6821
+  Interrupt: IRQ - Via the 6821 chips, NMI - Push Button? 
+  I/O: 2 X 6821 
 
   Issues/Todo:
-  Sound,
-  Lamps: Lamp Addr is 1-16 data, Lamp Data 0-3 (each bit selects different 1-16 mux) - Strobe 2 used for Aux Lamps
-  But the lamp data never changes???
 
-  Game is done with testing @ 14A3?
+  This hardware is a total nightmare.. The display stuff makes no sense to me. I haven't tried looking at
+  solenoids/lamps, or to see if switches are working.
+
+
+  Notes:
+  Manual shows only 48 switches, implying a 8x6 matrix (6 Strobes) - It shows 4 Switch Strobe & 2 Cab Strobe (shared)
+
+  Lamps: Lamp Addr is 1-16 data, Lamp Data 0-3 (each bit selects different 1-16 mux) - Strobe 2 used for Aux Lamps
+
+  Game is done with testing @ 14A3? 
   143E - Display some digits?
   152e - CLI - Clear Interrupt Disable
   RAM - 680 - Contains text for display driver
@@ -29,28 +35,22 @@
 #include "machine/6821pia.h"
 #include "core.h"
 #include "sim.h"
-#include "sndbrd.h"
 
 #define NUOVA_SOLSMOOTH 4
-#define NUOVA_CPUFREQ		1000000			//1 Mhz ??
-#define F1GP_ZCFREQ				240			//120 Hz * 2 ??
-#define F1GP_555TIMER_FREQ		 10			//??
+#define NUOVA_CPUFREQ		   500000			//0.5Mhz (NO IDEA)
+#define F1GP_ZCFREQ				220/2			//220 Volt / 2 (NO IDEA)
+#define F1GP_555TIMER_FREQ		500			//??
 
-#define F1GP_SWSNDDIAG		-2
-#define F1GP_SWCPUDIAG		-1
-#define F1GP_SWCPUBUTT		0
+#define F1GP_SWCPUBUTT    -7
+#define F1GP_SWCPUDIAG    -6
 
 #if 0
-#define LOG(x) logerror x
+#define LOG(x) printf x
 #else
-#define LOG(x)
+#define LOG(x) logerror x
 #endif
 
-#if 1
-#define LOGSND(x) logerror x
-#else
-#define LOGSND(x)
-#endif
+static int f1gp_data_to_eseg(int data);
 
 static struct {
   int vblankCount;
@@ -60,7 +60,7 @@ static struct {
   int diagnosticLed;
   int piaIrq;
   int SwCol;
-  int dispCol[4];
+  int DispCol;
   int LampCol;
   int zero_cross;
   int timer_555;
@@ -68,10 +68,9 @@ static struct {
   int pia0_a;
   int pia1_a;
   int pia0_cb2;
-  int pia1_cb2;
   int pia0_da_enable;
-  UINT8 sndCmd;
 } locals;
+//static data8_t *f1gp_CMOS;
 
 /***************/
 /* ZERO CROSS? */
@@ -89,6 +88,14 @@ static void f1gp_555timer(int data) {
 	 pia_set_input_ca1(1,locals.timer_555);
 }
 
+static WRITE_HANDLER(disp_w) { 
+	//LOG(("%08x: disp1_w = %04x\n",activecpu_get_previouspc(),data)); 
+	if(offset&0x80)
+		locals.segments[locals.DispCol].w = f1gp_data_to_eseg(data);
+	else
+		locals.segments[locals.DispCol+16].w = f1gp_data_to_eseg(data);
+}
+
 static INTERRUPT_GEN(f1gp_vblank) {
   /*-------------------------------
   /  copy local data to interface
@@ -97,22 +104,27 @@ static INTERRUPT_GEN(f1gp_vblank) {
 
   memcpy(coreGlobals.lampMatrix, coreGlobals.tmpLampMatrix, sizeof(coreGlobals.tmpLampMatrix));
   memcpy(coreGlobals.segments, locals.segments, sizeof(coreGlobals.segments));
-
+  
   coreGlobals.solenoids = locals.solenoids;
   if ((locals.vblankCount % NUOVA_SOLSMOOTH) == 0) {
 	locals.solenoids = coreGlobals.pulsedSolState;
   }
 
   coreGlobals.diagnosticLed = locals.diagnosticLed;
+  locals.diagnosticLed = 0;
 
-  core_updateSw(core_getSol(18));
+  core_updateSw(1);
 }
 
 static SWITCH_UPDATE(f1gp) {
   if (inports) {
-    CORE_SETKEYSW(inports[CORE_COREINPORT]<<4,0xe0,0);
-    CORE_SETKEYSW(inports[CORE_COREINPORT],   0x60,1);
-    CORE_SETKEYSW(inports[CORE_COREINPORT]>>8,0x87,2);
+	  //Column 0 Switches
+	  coreGlobals.swMatrix[0] = (inports[CORE_COREINPORT] & 0x00c0)>>6;		
+	  //Column 1 Switches
+	  coreGlobals.swMatrix[1] = (coreGlobals.swMatrix[1] & 0x9f) | ((inports[CORE_COREINPORT] & 0x03)<<5);
+	  //Column 2 Switches
+	  coreGlobals.swMatrix[2] = (coreGlobals.swMatrix[2] & 0x78) | 
+		  ((inports[CORE_COREINPORT] & 0x1c)>>2) | ((inports[CORE_COREINPORT] & 0x20)<<2);     
   }
   // CPU DIAG SWITCH
   if (core_getSw(F1GP_SWCPUBUTT))
@@ -131,18 +143,18 @@ static SWITCH_UPDATE(f1gp) {
 		  cpu_set_nmi_line(0, CLEAR_LINE);
 	  }
   }
-  pia_set_input_ca1(0,core_getSw(F1GP_SWCPUDIAG));
-  if (core_getSw(F1GP_SWSNDDIAG)) {
-    cpu_set_nmi_line(1, ASSERT_LINE);
-    cpu_set_irq_line(1, M6803_IRQ_LINE, ASSERT_LINE);
-  } else {
-    cpu_set_nmi_line(1, CLEAR_LINE);
-    cpu_set_irq_line(1, M6803_IRQ_LINE, CLEAR_LINE);
-  }
 }
 
 static void f1gp_irqline(int state) {
-  cpu_set_irq_line(0, M6808_IRQ_LINE, state ? ASSERT_LINE : CLEAR_LINE);
+  if (state) {
+    cpu_set_irq_line(0, M6808_IRQ_LINE, ASSERT_LINE);
+    pia_set_input_ca1(0, (core_getSw(F1GP_SWCPUDIAG))?1:0);
+  }
+  //else if (!locals.piaIrq) {
+  else {
+    cpu_set_irq_line(0, M6808_IRQ_LINE, CLEAR_LINE);
+    pia_set_input_ca1(0, 0);
+  }
 }
 
 static void f1gp_piaIrq(int state) {
@@ -153,7 +165,7 @@ static void f1gp_piaIrq(int state) {
 /* PIA 0 */
 /* ----- */
 
-/*  i  PB0-7:  Dips  1-32 Read & Switch Read 0-7 & Cabinet Switch Read 0-7 */
+/*  i  PB0-7:  Dips  1-32 Read & Swtich Read 0-7 & Cabinet Switch Read 0-7 */
 static READ_HANDLER(pia0_b_r)
 {
 	int data = 0;
@@ -169,11 +181,27 @@ static READ_HANDLER(pia0_b_r)
 	}
 	else
 	{
-		data = coreGlobals.swMatrix[locals.SwCol+1];	//+1 so we begin by reading column 1 of input matrix instead of 0 which is used for special switches in many drivers
+		data = coreGlobals.swMatrix[locals.SwCol+1];	//+1 so we begin by reading column 1 of input matrix instead of 0 which is used for special switches in many drivers 
 		LOG(("%04x: SWITCH COL #%d - READ: pia0_b_r =%x\n",activecpu_get_previouspc(),locals.SwCol,data));
 	}
+	//return data;
+	return 0;
+}
+/*  i  CA1:    Diagnostic Switch? */
+static READ_HANDLER(pia0_ca1_r)
+{
+	int data = (core_getSw(F1GP_SWCPUDIAG))?1:0;
+	LOG(("%04x: DIAG SWITCH: pia0_ca1_r =%x \n",activecpu_get_previouspc(),data));
 	return data;
 }
+/*   i  CB1:    Tied to 43V line (Some kind of zero cross detection?) */
+static READ_HANDLER(pia0_cb1_r)
+{
+	int data = locals.zero_cross;
+	LOG(("%04x: X-CROSS?: pia0_cb1_r = %x\n",activecpu_get_previouspc(),data));
+	return data;
+}
+
 /*
   o  PA0-PA1 Switch Strobe 0 - 1 & Cabinet Switch Strobe 0 - 1 & Lamp Addr 0 - 1 & Disp Strobe 0 - 1
   o  PA2-PA3 Switch Strobe 2 - 3 & Lamp Addr 2 - 3 & Disp Strobe 2 - 3
@@ -185,31 +213,34 @@ static READ_HANDLER(pia0_b_r)
 static WRITE_HANDLER(pia0_a_w)
 {
 	locals.pia0_a = data;
-	locals.SwCol = (data & 0x1f) ? core_BitColToNum(data & 0x1f) : 5;
+	locals.SwCol = core_BitColToNum(data & 0xf);
 	LOG(("%04x: EVERYTHING: pia0_a_w = %x \n",activecpu_get_previouspc(),data));
 }
 /*  o  CA2:    Display Blank */
 static WRITE_HANDLER(pia0_ca2_w)
 {
 	locals.pia0_da_enable = data & 1;
+	printf("%04x: DISP BLANK: pia0_ca2_w = %x \n",activecpu_get_previouspc(),data);
 	LOG(("%04x: DISP BLANK: pia0_ca2_w = %x \n",activecpu_get_previouspc(),data));
 }
 /*  o  CB2:    Dips 25-32 Strobe & Lamp Strobe #1 */
 static WRITE_HANDLER(pia0_cb2_w)
 {
-	UINT8 col = locals.pia0_a & 0x0f;
 	locals.pia0_cb2 = data & 1;
 	LOG(("%04x: DIP25 STR & LAMP STR 1: pia0_cb2_w = %x \n",activecpu_get_previouspc(),data));
-	if (col % 2 == 0)
-		coreGlobals.tmpLampMatrix[col/2] = (coreGlobals.tmpLampMatrix[col/2] & 0xf0) | (locals.pia0_a >> 4);
-	else
-		coreGlobals.tmpLampMatrix[col/2] = (coreGlobals.tmpLampMatrix[col/2] & 0x0f) | (locals.pia0_a & 0xf0);
 }
 
  /* -----------*/
  /* PIA 1 (U10)*/
  /* -----------*/
 
+/* i  CA1:    Tied to a 555 timer */
+static READ_HANDLER(pia1_ca1_r)
+{
+	int data = locals.timer_555;
+	LOG(("%04x: 555 Timer: pia1_ca1_r = %x\n",activecpu_get_previouspc(),data));
+	return data;
+}
 /* i  CB1:    Marked FE */
 static READ_HANDLER(pia1_cb1_r)
 {
@@ -217,50 +248,36 @@ static READ_HANDLER(pia1_cb1_r)
 	return 0;
 }
 
-static const UINT16 core_ascii2seg[] = {
-  /* 0x00-0x07 */ 0x0000, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x08-0x0f */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x10-0x17 */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x18-0x1f */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x20-0x27 */ 0x0000, 0x0309, 0x0220, 0x2A4E, 0x2A6D, 0x5d64, 0x135D, 0x0200, //  !"#$%&'
-  /* 0x28-0x2f */ 0x1400, 0x4100, 0x7F40, 0x2A40, 0x0080, 0x0840, 0x8000, 0x4400, // ()*+,-./
-  /* 0x30-0x37 */ 0x003f, 0x2200, 0x085B, 0x084f, 0x0866, 0x086D, 0x087D, 0x0007, // 01234567
-  /* 0x38-0x3f */ 0x087F, 0x086F, 0x0800, 0x8080, 0x1400, 0x0848, 0x4100, 0x2803, // 89:;<=>?
-  /* 0x40-0x47 */ 0x205F, 0x0877, 0x2A0F, 0x0039, 0x220F, 0x0079, 0x0071, 0x083D, // @ABCDEFG
-  /* 0x48-0x4f */ 0x0876, 0x2209, 0x001E, 0x1470, 0x0038, 0x0536, 0x1136, 0x003f, // HIJKLMNO
-  /* 0x50-0x57 */ 0x0873, 0x103F, 0x1873, 0x086D, 0x2201, 0x003E, 0x4430, 0x5036, // PRQSTUVW
-  /* 0x58-0x5f */ 0x5500, 0x2500, 0x4409, 0x0039, 0x1100, 0x000f, 0x0402, 0x0008, // XYZ[\]^_
-  /* 0x60-0x67 */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x68-0x6f */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x70-0x77 */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-  /* 0x78-0x7f */ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-};
-
-/*
+/* 
   o  PA0     Display Strobe 5
   o  PA1-7   Display Digit 1-7 (note: diagram shows PA7 =Digit 1, PA6 = Digit 2, etc..)
 */
+static int lastval = 0;
+static int lastcol = 0;
 static WRITE_HANDLER(pia1_a_w)
 {
-	static int counter = 0;
-	LOG(("%04x: DISPLAY: pia1_a_w = %x \n",activecpu_get_previouspc(),data));
-	if (data & 0x80) { // 1st display strobe
-		if (locals.dispCol[0] < 20)
-			locals.segments[locals.dispCol[0]++].w = core_ascii2seg[locals.pia0_a & 0x7f];
-		counter++;
-		if (counter > 7) {
-			counter = 0;
-			locals.dispCol[0] = 0;
-			locals.dispCol[1] = 0;
-		}
-	} else if (data & 0x40) { // 2nd display strobe
-		counter = 0;
-		if (locals.dispCol[1] < 12)
-			locals.segments[20+(locals.dispCol[1]++)].w = core_ascii2seg[locals.pia0_a & 0x7f];
-	}
 	locals.pia1_a = data;
+
+	//Display Blank must be 0 - for data to display
+	if(!locals.pia0_da_enable)
+	{
+		printf("%04x: DISPLAY STR.5 & DIGIT: pia1_a_w = %x (BLANK=%x DIG=%x CHAR=%c) \n",activecpu_get_previouspc(),data,data&1,data>>1,locals.pia0_a);
+		//LOG(("%04x: DISPLAY STR.5 & DIGIT: pia1_a_w = %x (STR.5=%x DIG=%x) \n",activecpu_get_previouspc(),data,data&1,data>>1));
+		if( ((data>>1)==0) && lastval)
+			{
+				//hack to remove the spaces
+				if((lastcol&0x40)==0)
+					locals.DispCol = (locals.DispCol + 1) % 16;
+				if(lastcol&0x80) printf("****************\n");
+				disp_w(lastcol,locals.pia0_a);
+				printf("dispcol = %d\n",locals.DispCol);
+			}
+		else
+			lastcol = data;
+		lastval = (data>>1)?1:0;
+	}
 }
-/*
+/* 
   o  PB0:    A Solenoid
   o  PB1:    B Solenoid
   o  PB2:    C Solenoid
@@ -272,30 +289,59 @@ static WRITE_HANDLER(pia1_a_w)
 */
 static WRITE_HANDLER(pia1_b_w)
 {
-	if (locals.pia1_cb2) { // sound
-		locals.sndCmd = data & 0x0f;
-		if ((data & 0x0f) < 0x0f) LOGSND(("snd data w = %x\n", data & 0x0f));
-	} else if ((data & 0x20) == 0) { // activates any solenoid
-		locals.solenoids = 0xf7fff & ((core_revbyte(~data & 0xd0) << 16) | (1 << (data & 0x0f)));
-		LOG(("%04x: SOLS & (SOUND?): pia1_b_w = %x \n",activecpu_get_previouspc(),data));
-	}
+	LOG(("%04x: SOLS & (SOUND?): pia1_b_w = %x \n",activecpu_get_previouspc(),data));
 }
 /* o  CA2:    LED & Lamp Strobe #2 */
 static WRITE_HANDLER(pia1_ca2_w)
 {
-	UINT8 col = locals.pia0_a & 0x0f;
-	locals.diagnosticLed = (locals.diagnosticLed & 2) | (data & 1);
+	locals.diagnosticLed = data & 1;
 	LOG(("%04x: LED & Lamp Strobe #2: pia1_ca2_w = %x \n",activecpu_get_previouspc(),data));
-	if (col % 2 == 0)
-		coreGlobals.tmpLampMatrix[8 + col/2] = (coreGlobals.tmpLampMatrix[8 + col/2] & 0xf0) | (locals.pia0_a >> 4);
-	else
-		coreGlobals.tmpLampMatrix[8 + col/2] = (coreGlobals.tmpLampMatrix[8 + col/2] & 0x0f) | (locals.pia0_a & 0xf0);
 }
 /* o  CB2:    Solenoid Bank Select */
 static WRITE_HANDLER(pia1_cb2_w)
 {
-	locals.pia1_cb2 = data & 1;
 	LOG(("%04x: SOL BANK SELECT: pia1_cb2_w = %x \n",activecpu_get_previouspc(),data));
+}
+
+//All these should not be used according to schematic
+static READ_HANDLER(pia0_a_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia0_a_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static READ_HANDLER(pia0_ca2_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia0_ca2_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static READ_HANDLER(pia0_cb2_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia0_cb2_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static READ_HANDLER(pia1_a_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia1_a_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static READ_HANDLER(pia1_b_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia1_b_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static READ_HANDLER(pia1_ca2_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia1_ca2_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static READ_HANDLER(pia1_cb2_r)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia1_cb2_r \n",activecpu_get_previouspc()));
+	return 0;
+}
+static WRITE_HANDLER(pia0_b_w)
+{
+	LOG(("%04x: *WARNING* - Undocumented - pia0_b_w = %x \n",activecpu_get_previouspc(),data));
 }
 
 static const struct pia6821_interface f1gp_pia[] = {
@@ -312,8 +358,8 @@ static const struct pia6821_interface f1gp_pia[] = {
   i  CB1:    Tied to 43V line (Some kind of zero cross detection?)
   o  CA2:    Activates Disp Addr Data
   o  CB2:    Dips 25-32 Strobe & Lamp Strobe #1 */
- /* in  : A/B,CA1/B1,CA2/B2 */ 0, pia0_b_r, 0, 0, 0, 0,
- /* out : A/B,CA2/B2        */ pia0_a_w, 0, pia0_ca2_w, pia0_cb2_w,
+ /* in  : A/B,CA1/B1,CA2/B2 */ pia0_a_r, pia0_b_r, pia0_ca1_r, pia0_cb1_r, pia0_ca2_r, pia0_cb2_r,
+ /* out : A/B,CA2/B2        */ pia0_a_w, pia0_b_w, pia0_ca2_w, pia0_cb2_w,
  /* irq : A/B               */ f1gp_piaIrq, f1gp_piaIrq
 },{
  /* PIA 1 (U10)
@@ -332,7 +378,7 @@ static const struct pia6821_interface f1gp_pia[] = {
   i  CB1:    Marked FE
   o  CA2:    LED & Lamp Strobe #2
   o  CB2:    Solenoid Bank Select */
- /* in  : A/B,CA1/B1,CA2/B2 */ 0, 0, 0, pia1_cb1_r, 0, 0,
+ /* in  : A/B,CA1/B1,CA2/B2 */ pia1_a_r, pia1_b_r, pia1_ca1_r, pia1_cb1_r, pia1_ca2_r, pia1_cb2_r,
  /* out : A/B,CA2/B2        */ pia1_a_w, pia1_b_w, pia1_ca2_w, pia1_cb2_w,
  /* irq : A/B               */ f1gp_piaIrq, f1gp_piaIrq
 }
@@ -342,7 +388,9 @@ static MACHINE_INIT(f1gp) {
   memset(&locals, 0, sizeof(locals));
   pia_config(0, PIA_STANDARD_ORDERING, &f1gp_pia[0]);
   pia_config(1, PIA_STANDARD_ORDERING, &f1gp_pia[1]);
-  sndbrd_0_init(SNDBRD_ZAC1346, 1, memory_region(REGION_CPU2), NULL, NULL);
+#if 0
+  sndbrd_0_init(SNDBRD_S67S, 1, NULL, NULL, NULL);
+#endif
 }
 
 static MACHINE_RESET(f1gp) {
@@ -353,40 +401,125 @@ static MACHINE_STOP(f1gp) {
   //sndbrd_0_exit();
 }
 
-/*-----------------------------------------------
-/ Load/Save static ram
-/-------------------------------------------------*/
-static data8_t *s6_CMOS;
-static NVRAM_HANDLER(f1gp) {
-  core_nvram(file, read_or_write, s6_CMOS, 0x0800, 0x00); // 2K of RAM, battery-backed
+
+//Lamp Rows (actually columns) 1-8
+static WRITE16_HANDLER(lamp1_w) { locals.LampCol = core_BitColToNum(data >> 8); }
+//Lamp Cols (actually rows) 1-8
+static WRITE16_HANDLER(lamp2_w) { 	coreGlobals.tmpLampMatrix[locals.LampCol] = data>>8; }
+
+//Solenoids 1-16
+static WRITE16_HANDLER(sol1_w) { coreGlobals.pulsedSolState = (coreGlobals.pulsedSolState & 0xFFFF0000) | data; }
+//Solenoids 17-32
+static WRITE16_HANDLER(sol2_w) { coreGlobals.pulsedSolState = (coreGlobals.pulsedSolState & 0x0000FFFF) | (data<<16); }
+
+
+
+
+/*********************************************************************************************
+    Convert F1 Grand Prix Display Driver Codes to standard core 16 segment characeters
+
+   Core16 Segment Layout
+
+         1                                              1
+    ----------                                       ---------
+   |\9 10| 11/|             9 \ 10|   / 11           |       |
+ 6 | \   |  / | 2              \  |  /             6 |       | 2 
+   |  \  | /  |                 \ | /                |       |
+ 7  ----  ----  12          7 ---- ---- 12         7 ---- ---- 12  
+   |15/ | \13 |                 / |\                 |       |
+ 5 | /  |  \  | 3           15 /  | \ 13           5 |       | 3 
+   |/ 14|   \ |               / 14|  \               |       |
+    ----------                                       ---------  
+        4                                               4      
+
+	8 = comma, 16 = period
+
+	Empty:
+	(20) = 0
+
+	Numbers: (BITS ON)
+	0 (30) = (1,2,3,4,5,6)					= 0x3f
+	1 (31) = (2,3)							= 0x06
+	2 (32) = (1,2,4,5,7,12)					= 0x85b
+	3 (33) = (1,2,3,4,7,12)					= 0x84f
+	4 (34) = (2,3,6,7,12)					= 0x866
+	5 (35) = (1,3,4,6,7,12)					= 0x86d
+	6 (36) = (1,3,4,5,6,7,12)				= 0x87d
+	7 (37) = (1,2,3)						= 0x07
+	8 (38) = (1,2,3,4,5,6,7,12)				= 0x87f
+	9 (39) = (1,2,3,4,6,7,12)				= 0x86f
+    : (3A) = (assume it means period) (16)	= 0x8000
+	; (3B) = (assume it means comma)  (8)	= 0x80
+	Special Chars 1:
+	< (3C) = (11,13)						= 0x1400
+	= (3D) = ??								= 0xffff (all)
+	> (3E) = (9,15)							= 0x4100
+	? (3F) = ?								= 0xffff (all)
+	@ (40) = ?								= 0xffff (all)
+	Letters:
+	A (41) = (1,2,3,5,6,7,12)				= 0x877	
+	B (42) = (1,2,3,4,10,12,14)				= 0x2a0f
+	C (43) = (1,4,5,6)						= 0x39
+	D (44) = (1,2,3,4,10,14)				= 0x220f
+	E (45) = (1,4,5,6,7,12)					= 0x879
+	F (46) = (1,5,6,7,12)					= 0x871
+	G (47) = (1,3,4,5,6,12)					= 0x83d
+	H (48) = (2,3,5,6,7,12)					= 0x876	
+	I (49) = (1,4,10,14)					= 0x2209
+	J (4A) = (2,3,4,5)						= 0x1e
+	K (4B) = (5,6,7,11,13)					= 0x1470
+	L (4C) = (4,5,6)						= 0x38
+	M (4D) = (2,3,5,6,9,11)					= 0x536
+	N (4E) = (2,3,5,6,9,13)					= 0x1136
+	O (4F) = (1,2,3,4,5,6)					= 0x3f
+	P (50) = (1,2,5,6,7,12)					= 0x873
+	Q (51) = (1,2,3,4,5,6,13)				= 0x103f
+	R (52) = (1,2,5,6,7,12,13)				= 0x1873
+	S (53) = (1,3,4,6,7,12)					= 0x86d
+	T (54) = (1,10,14)						= 0x2201
+	U (55) = (2,3,4,5,6)					= 0x3e
+	V (56) = (5,6,11,15)					= 0x4430
+	W (57) = (2,3,5,6,13,15)				= 0x5036
+	X (58) = (9,11,13,15)					= 0x5500
+	Y (59) = (9,11,14)						= 0x2500
+	Z (5A) = (1,4,11,15)					= 0x4409
+	Chars:
+	[ (5B) = (1,4,5,6)						= 0x39
+	\ (5C) = (9,13)							= 0x1100
+	] (5D) = (1,2,3,4)						= 0x0f
+	^ (5E) = (13,15)						= 0x5000
+	- (5F) = (7,12)							= 0x840
+*/
+
+static const int data_to_seg[] = {
+	0x3f,0x06,0x85b,0x84f,0x866,0x86d,0x87d,0x07,0x87f,0x86f,0x8000,0x80,  	  //0-9 AND .,
+	0x1400,0xffff,0x4100,0xffff,0xffff,										  //Spec Chars 1
+	0x877,0x2a0f,0x39,0x220f,0x879,0x871,0x83d,0x876,0x2209,0x1e,0x1470,0x38, //A - L
+	0x536,0x1136,0x3f,0x873,0x103f,0x1873,0x86d,0x2201,0x3e,0x4430,0x5036,	  //M - W
+	0x5500,0x2500,0x4409,													  //X - Z
+	0x39,0x1100,0x0f,0x5000,0x840											  //Spec Chars 2
+};
+
+static int f1gp_data_to_eseg(int data)
+{
+	if(data == 0x20) return 0;
+	if(data > 0x5f) 
+		{
+			printf("missing seg # %x\n",data);
+			return 0xffff;
+		}
+	return data_to_seg[data-0x30];
 }
-static WRITE_HANDLER(s6_CMOS_w_0) {
-	s6_CMOS[offset] = data;
-}
-static READ_HANDLER(s6_CMOS_r_0) {
-	return s6_CMOS[offset];
-}
-static WRITE_HANDLER(s6_CMOS_w_1) {
-	s6_CMOS[0x8c + offset] = data;
-}
-static READ_HANDLER(s6_CMOS_r_1) {
-	return s6_CMOS[0x8c + offset];
-}
-static WRITE_HANDLER(s6_CMOS_w_2) {
-	s6_CMOS[0x94 + offset] = data;
-}
-static READ_HANDLER(s6_CMOS_r_2) {
-	return s6_CMOS[0x94 + offset];
-}
+
 /*-----------------------------------
 /  Memory map for Main CPU board
 /------------------------------------*/
 static MEMORY_READ_START(cpu_readmem)
-  { 0x0000, 0x0087, s6_CMOS_r_0 },
-  { 0x0088, 0x008b, pia_r(0)},
-  { 0x008c, 0x008f, s6_CMOS_r_1 },
+  { 0x0000, 0x0087, MRA_RAM }, 
+  { 0x0088, 0x008b, pia_r(0)}, 
+  { 0x008c, 0x008f, MRA_RAM }, 
   { 0x0090, 0x0093, pia_r(1)},
-  { 0x0094, 0x07ff, s6_CMOS_r_2 },
+  { 0x0094, 0x07ff, MRA_RAM }, 
   { 0x1000, 0x1fff, MRA_ROM },
   { 0x5000, 0x5fff, MRA_ROM },
   { 0x7000, 0x7fff, MRA_ROM },
@@ -397,12 +530,11 @@ static MEMORY_READ_START(cpu_readmem)
 MEMORY_END
 
 static MEMORY_WRITE_START(cpu_writemem)
-  { 0x0000, 0x0087, s6_CMOS_w_0 },
-  { 0x0088, 0x008b, pia_w(0)},
-  { 0x008c, 0x008f, s6_CMOS_w_1 },
+  { 0x0000, 0x0087, MWA_RAM }, 
+  { 0x0088, 0x008b, pia_w(0)}, 
+  { 0x008c, 0x008f, MWA_RAM }, 
   { 0x0090, 0x0093, pia_w(1)},
-  { 0x0094, 0x07ff, s6_CMOS_w_2 },
-  { 0x0800, 0x0fff, MWA_RAM, &s6_CMOS }, // initialization of the RAM
+  { 0x0094, 0x07ff, MWA_RAM },
   { 0x1000, 0x1fff, MWA_ROM },
   { 0x5000, 0x5fff, MWA_ROM },
   { 0x7000, 0x7fff, MWA_ROM },
@@ -412,53 +544,26 @@ static MEMORY_WRITE_START(cpu_writemem)
   { 0xf000, 0xffff, MWA_ROM },
 MEMORY_END
 
-static WRITE_HANDLER(bank_w) {
-  data = ~data;
-  LOGSND(("m8000w = %x\n",data));
-  locals.diagnosticLed = (locals.diagnosticLed & 1) | ((data >> 6) & 2);
-  if (data & 0x0f)
-    cpu_setbank(1, memory_region(REGION_SOUND1) + (0x8000 * data & 0x07));
-  else
-    cpu_setbank(1, memory_region(REGION_SOUND1));
-}
-
-static READ_HANDLER(snd_cmd_r) {
-  return locals.sndCmd;
-}
-
-static WRITE_HANDLER(snd_enable) {
-  LOGSND(("sound P2w: %02x\n", data));
-}
-
-static MEMORY_READ_START(snd_readmem)
-  { 0x0000, 0x00ff, MRA_RAM },
-  { 0x8000, 0xffff, MRA_BANKNO(1) },
-MEMORY_END
-
-static MEMORY_WRITE_START(snd_writemem)
-  { 0x0000, 0x00ff, MWA_RAM },
-  { 0xc000, 0xc000, bank_w  },
-MEMORY_END
-
-static PORT_READ_START(snd_readport)
-  { M6803_PORT2, M6803_PORT2, snd_cmd_r },
-PORT_END
-
-static PORT_WRITE_START(snd_writeport)
-  { M6803_PORT1, M6803_PORT1, DAC_0_data_w },
-  { M6803_PORT2, M6803_PORT2, snd_enable },
-PORT_END
-
 static core_tLCDLayout disp[] = {
   {0, 0, 0,16,CORE_SEG16},
   {3, 0,16,16,CORE_SEG16},
   {0}
 };
-static core_tGameData f1gpGameData = {GEN_ZAC2, disp, {FLIP_SWNO(48, 0), 0, 2}};
+static core_tGameData f1gpGameData = {GEN_ZAC2, disp};
 static void init_f1gp(void) {
   core_gameData = & f1gpGameData;
 }
-static struct DACinterface nuova_dacInt = { 1, { 25 }};
+
+/* Manual starts with a switch # of 0 */
+static int f1gp_sw2m(int no) { return no+7+1; }
+static int f1gp_m2sw(int col, int row) { return col*8+row-7-1; }
+
+/*-----------------------------------------------
+/ Load/Save static ram
+/-------------------------------------------------*/
+static NVRAM_HANDLER(f1gp) {
+  //core_nvram(file, read_or_write, s6_CMOS, 0x0100, 0xff);
+}
 
 MACHINE_DRIVER_START(f1gp)
   MDRV_IMPORT_FROM(PinMAME)
@@ -469,32 +574,31 @@ MACHINE_DRIVER_START(f1gp)
   MDRV_NVRAM_HANDLER(f1gp)
   MDRV_DIPS(32)
   MDRV_SWITCH_UPDATE(f1gp)
-  MDRV_DIAGNOSTIC_LEDH(2)
+  MDRV_DIAGNOSTIC_LEDH(1)
   MDRV_TIMER_ADD(f1gp_zeroCross, F1GP_ZCFREQ)
   MDRV_TIMER_ADD(f1gp_555timer,  F1GP_555TIMER_FREQ)
-
-  MDRV_CPU_ADD_TAG("scpu", M6803, 1000000)
-  MDRV_CPU_MEMORY(snd_readmem, snd_writemem)
-  MDRV_CPU_PORTS(snd_readport, snd_writeport)
-  MDRV_SOUND_ADD(DAC, nuova_dacInt)
-  MDRV_INTERLEAVE(500)
 MACHINE_DRIVER_END
 
 INPUT_PORTS_START(f1gp) \
   CORE_PORTS \
   SIM_PORTS(4) \
   PORT_START /* 0 */ \
-  /* Switch Column 1 */ \
-    COREPORT_BITDEF(  0x0020, IPT_START1,         IP_KEY_DEFAULT) \
-    COREPORT_BIT(     0x0040, "Ball Tilt",        KEYCODE_INSERT) \
-    COREPORT_BITDEF(  0x0100, IPT_COIN1,          IP_KEY_DEFAULT) \
-    COREPORT_BITDEF(  0x0200, IPT_COIN2,          KEYCODE_3) \
-    COREPORT_BITDEF(  0x0400, IPT_COIN3,          KEYCODE_4) \
-    COREPORT_BIT   (  0x8000, "Slam Tilt",        KEYCODE_HOME) \
-  /* These are put in switch column 0 since they are not read in the regular switch matrix */ \
-    COREPORT_BIT(     0x0008, "CPU Button",       KEYCODE_7) \
-	COREPORT_BIT(     0x0004, "Self Test",        KEYCODE_8) \
-	COREPORT_BIT(     0x0002, "Sound Test",       KEYCODE_0) \
+  /* Switch Column 1 */
+    /* Switch  6 (SW Col 1?)*/
+    COREPORT_BITDEF(  0x0001, IPT_START1,         IP_KEY_DEFAULT) \
+    /* Switch  7 (SW Col 1?)*/
+    COREPORT_BIT(     0x0002, "Ball Tilt",        KEYCODE_INSERT) \
+    /* Switch  9 (SW Col 2?)*/
+    COREPORT_BITDEF(  0x0004, IPT_COIN2,          KEYCODE_3) \
+	/* Switch 10 (SW Col 2?)*/
+    COREPORT_BITDEF(  0x0008, IPT_COIN1,          IP_KEY_DEFAULT) \
+	/* Switch 11 (SW Col 2?)*/
+    COREPORT_BITDEF(  0x0010, IPT_COIN3,          KEYCODE_4) \
+	/* Switch 16 (SW Col 2?)*/
+    COREPORT_BIT   (  0x0020, "Slam Tilt",        KEYCODE_DEL) \
+    /* These are put in switch column 0 since they are not read in the regular switch matrix */ \
+    COREPORT_BIT(     0x0040, "CPU Button",       KEYCODE_7) \
+	COREPORT_BIT(     0x0080, "Self Test",        KEYCODE_8) \
   PORT_START /* 1 */ \
     COREPORT_DIPNAME( 0x0001, 0x0000, "S1") \
       COREPORT_DIPSET(0x0000, "0" ) \
@@ -613,28 +717,18 @@ INPUT_PORTS_END
 // Check - Data @ 0xD000 = 0xD5 (found @ 3000) (A15->A13, A14=0)
 // Check - Data @ 0xF000 = 0xFA (found @ 7000) (A15->A13, A12->A14, A14->A12)
 
-ROM_START(f1gp)
-  NORMALREGION(0x10000, REGION_CPU1)
-    ROM_LOAD("cpu_u7", 0x8000, 0x8000, CRC(2287dea1) SHA1(5438752bf63aadaa6b6d71bbf56a72d8b67b545a))
-  ROM_COPY(REGION_CPU1, 0x8000, 0x1000,0x1000)
-  ROM_COPY(REGION_CPU1, 0x9000, 0x5000,0x1000)
-  ROM_COPY(REGION_CPU1, 0xd000, 0x7000,0x1000)
-  ROM_COPY(REGION_CPU1, 0xa000, 0x9000,0x1000)
-  ROM_COPY(REGION_CPU1, 0xb000, 0xd000,0x1000)
-  ROM_COPY(REGION_CPU1, 0xe000, 0xb000,0x1000)
-
-  NORMALREGION(0x40000, REGION_SOUND1)
-    ROM_LOAD("snd_u8b", 0x0000, 0x8000, CRC(14cddb29) SHA1(667b54174ad5dd8aa45037574916ecb4ee996a94))
-    ROM_LOAD("snd_u8a", 0x8000, 0x8000, CRC(3a2af90b) SHA1(f6eeae74b3bfb1cfd9235c5214f7c029e0ad14d6))
-    ROM_LOAD("snd_u9b", 0x10000,0x8000, CRC(726920b5) SHA1(002e7a072a173836c89746cceca7e5d2ac26356d))
-    ROM_LOAD("snd_u9a", 0x18000,0x8000, CRC(681ee99c) SHA1(955cd782073a1ce0be7a427c236d47fcb9cccd20))
-    ROM_LOAD("snd_u10b",0x20000,0x8000, CRC(9de359fb) SHA1(ce75a78dc4ed747421a386d172fa0f8a1369e860))
-    ROM_LOAD("snd_u10a",0x28000,0x8000, CRC(4d3fc9bb) SHA1(d43cd134f399e128a678b86e57b1917fad70df76))
-    ROM_LOAD("snd_u11b",0x30000,0x8000, CRC(2394b498) SHA1(bf0884a6556a27791e7e801051be5975dd6b95c4))
-    ROM_LOAD("snd_u11a",0x38000,0x8000, CRC(884dc754) SHA1(b121476ea621eae7a7ba0b9a1b5e87051e1e9e3d))
-  NORMALREGION(0x10000, REGION_CPU2)
-  ROM_COPY(REGION_SOUND1, 0x0000, 0x8000,0x8000)
+ROM_START(f1gp) \
+  NORMALREGION(0x100000, REGION_USER1) \
+    ROM_LOAD("cpu_u7", 0x0000, 0x8000, CRC(2287dea1) SHA1(5438752bf63aadaa6b6d71bbf56a72d8b67b545a)) \
+  NORMALREGION(0x100000, REGION_CPU1) \
+  ROM_COPY(REGION_USER1, 0x0000, 0x1000,0x1000) \
+  ROM_COPY(REGION_USER1, 0x1000, 0x5000,0x1000) \
+  ROM_COPY(REGION_USER1, 0x5000, 0x7000,0x1000) \
+  ROM_COPY(REGION_USER1, 0x2000, 0x9000,0x1000) \
+  ROM_COPY(REGION_USER1, 0x6000, 0xb000,0x1000) \
+  ROM_COPY(REGION_USER1, 0x3000, 0xd000,0x1000) \
+  ROM_COPY(REGION_USER1, 0x7000, 0xf000,0x1000)
 ROM_END
 
-CORE_GAMEDEFNV(f1gp, "F1 Grand Prix", 1987, "Nuova Bell Games", f1gp, GAME_NOT_WORKING)
+CORE_GAMEDEFNV(f1gp, "F1 Grand Prix", 1987, "Nuova Bell Games", f1gp, GAME_NOT_WORKING | GAME_NO_SOUND)
 
