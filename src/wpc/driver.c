@@ -44,7 +44,7 @@ DRIVERNV(agsoccer)		//A.G. Soccer (1992)
 //DRIVERNV(agfootbl)	//A.G. Football (1992)
 DRIVERNV(wrldtour)		//Al's Garage Band Goes On A World Tour (1992)
 DRIVERNV(wrldtou2)		//Al's Garage Band Goes On A World Tour R02b (1992)
-DRIVERNV(usafootb)      //U.S.A. Football (1993)
+//DRIVERNV(usafootb)	//U.S.A. Football (1992)
 DRIVERNV(dinoeggs)		//Dinosaur Eggs (1993)
 //DRIVERNV(dualpool)	//Dual Pool (1993) - 1 Unit
 //DRIVERNV(maxbadaz)	//Max Badazz (1993) - 1 Unit
@@ -984,7 +984,6 @@ DRIVERNV(potc_400af)		//S.A.M: ??/?? Pirates of the Caribbean V4.00AF (English &
 DRIVERNV(potc_400ai)		//S.A.M: ??/?? Pirates of the Caribbean V4.00AI (English & Italian)
 DRIVERNV(potc_400al)		//S.A.M: ??/?? Pirates of the Caribbean V4.00AL (English & Spanish)
 DRIVERNV(potc_400gf)		//S.A.M: ??/?? Pirates of the Caribbean V4.00GF (German & French)
-DRIVERNV(potc_600as)		//S.A.M: ??/?? Pirates of the Caribbean V6.00AS (English & Spanish)
 DRIVERNV(scarn9nj)			//S.A.M: ??/?? Simpsons Kooky Carnival Redemption V0.9 New Jersey (English)
 DRIVERNV(scarn103)			//S.A.M: ??/?? Simpsons Kooky Carnival Redemption V1.03 (English)
 DRIVERNV(scarn)				//S.A.M: ??/?? Simpsons Kooky Carnival Redemption V1.05 (English)

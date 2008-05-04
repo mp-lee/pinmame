@@ -117,23 +117,23 @@
     COREPORT_DIPNAME( 0x0008, 0x0000, "S4 prog enable") \
       COREPORT_DIPSET(0x0000, "0" ) \
       COREPORT_DIPSET(0x0008, "1" ) \
-    COREPORT_DIPNAME( 0x00f0, 0x0060, "Speech clock speed") \
-      COREPORT_DIPSET(0x0000, "620 kHz" ) \
-      COREPORT_DIPSET(0x0010, "626 kHz" ) \
-      COREPORT_DIPSET(0x0020, "634 kHz" ) \
-      COREPORT_DIPSET(0x0030, "640 kHz" ) \
-      COREPORT_DIPSET(0x0040, "646 kHz" ) \
-      COREPORT_DIPSET(0x0050, "654 kHz" ) \
-      COREPORT_DIPSET(0x0060, "660 kHz" ) \
-      COREPORT_DIPSET(0x0070, "666 kHz" ) \
-      COREPORT_DIPSET(0x0080, "674 kHz" ) \
-      COREPORT_DIPSET(0x0090, "680 kHz" ) \
-      COREPORT_DIPSET(0x00a0, "686 kHz" ) \
-      COREPORT_DIPSET(0x00b0, "694 kHz" ) \
-      COREPORT_DIPSET(0x00c0, "700 kHz" ) \
-      COREPORT_DIPSET(0x00d0, "706 kHz" ) \
-      COREPORT_DIPSET(0x00e0, "714 kHz" ) \
-      COREPORT_DIPSET(0x00f0, "720 kHz" )
+    COREPORT_DIPNAME( 0x00f0, 0x00b0, "Speech clock speed") \
+      COREPORT_DIPSET(0x0000, "530 kHz" ) \
+      COREPORT_DIPSET(0x0010, "540 kHz" ) \
+      COREPORT_DIPSET(0x0020, "550 kHz" ) \
+      COREPORT_DIPSET(0x0030, "560 kHz" ) \
+      COREPORT_DIPSET(0x0040, "570 kHz" ) \
+      COREPORT_DIPSET(0x0050, "580 kHz" ) \
+      COREPORT_DIPSET(0x0060, "590 kHz" ) \
+      COREPORT_DIPSET(0x0070, "600 kHz" ) \
+      COREPORT_DIPSET(0x0080, "610 kHz" ) \
+      COREPORT_DIPSET(0x0090, "620 kHz" ) \
+      COREPORT_DIPSET(0x00a0, "630 kHz" ) \
+      COREPORT_DIPSET(0x00b0, "640 kHz" ) \
+      COREPORT_DIPSET(0x00c0, "650 kHz" ) \
+      COREPORT_DIPSET(0x00d0, "660 kHz" ) \
+      COREPORT_DIPSET(0x00e0, "670 kHz" ) \
+      COREPORT_DIPSET(0x00f0, "680 kHz" )
 
 /*-- Standard input ports --*/
 #define ZACOLD_INPUT_PORTS_START(name,balls) \
