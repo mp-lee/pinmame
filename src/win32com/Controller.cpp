@@ -13,7 +13,7 @@
 // Controller.cpp : Implementation of Controller and DLL registration.
 
 #include "stdafx.h"
-#include "VPinMAME_h.h"
+#include "VPinMAME.h"
 #include "VPinMAMEAboutDlg.h"
 #include "VPinMAMEConfig.h"
 
